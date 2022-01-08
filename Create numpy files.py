@@ -33,32 +33,37 @@ import shutil
 # path_prefix = pc_path if platform.system() == 'Windows' else mobile_path
 path_prefix = '..'
 JSON_folder = path_prefix + '/Compiling JSONs/'
-numpy_folder = path_prefix + '/Numpy entries/'
+numpy_folder = path_prefix + '/Numpy entries new/'
+
+standard_interval_in_min = 15
 
 excludedOutputs = ['', 'undefined']
 excludedIntakes = ['', 'undefined']
 
 split_map_field_data = re.compile('.*/(-*\d+\.\d+)%2C(-*\d+\.\d+)')
 
+# updated to include the 'condense' type - for an array of lists, ie functions, or spray locations,
+# we need to add the lists together without forcing a dtype='f8'
 key_prefix_decode = {
                      "Al": "iia",  # allergens
                      "Co": "iia",  # combined solid food
-                     "Da": "oom",  # functions data
+                     "Da": "ooc",  # functions data
                      "Dt": "met",  # continuous date time array
                      "En": "met",  # timestamps only
-                     "Ex": "ioa",  # exercise
+                     "Ex": "ioc",  # exercise
                      "Li": "iia",  # liquid
                      "Lo": "met",  # locations
-                     "Me": "iia",  # metadata, should really be met
+                     # "Me": "iia",  # metadata, should really be met
+                     "Me": "met",  # metadata, should really be met
                      "Pi": "met",  # pollen inputs
-                     "Pl": "iia",  # procedures list, nasal rinse etc
+                     "Pl": "iic",  # procedures list, nasal rinse etc
                      "RE": "ioa",  # rest
                      "SA": "ioa",  # sleep - all
                      "SD": "ioa",  # sleep - during day
                      "SN": "ioa",  # sleep - during night
                      "Sc": "iom",  # symptoms conglomerate
                      "Sl": "iim",  # sublingual
-                     "Sp": "iia",  # spray
+                     "Sp": "iic",  # spray
                      "St": "ioa",  # step count
                      "Su": "iia",  # supplements
                      "Sy": "iom",  # symptoms
@@ -75,7 +80,11 @@ def main(update_numpy_files=False):
     global Con, Cur
     global date_stamps, useful_indices, empty_row
     global start_date_time, end_date_time, all_date_times, utc, startDateTimeInMin
-
+    global get_last_value_fails
+    global update_numpy_errors, rebin_errors
+    
+    get_last_value_fails = []
+    update_numpy_errors, rebin_errors = [], []
 
     # zip and backup current numpy files.
     if update_numpy_files:
@@ -97,7 +106,7 @@ def main(update_numpy_files=False):
     # for the initial run, shift the archive data across
     # get last entry in Current status that we care about
     # end_date_time = get_end_date()
-    end_date_time = '2021-07-02 03:45'
+    end_date_time = '2021-07-01 03:45'
 
     # apply this to all results from list_content
     useful_indices = get_useful_indices(start_date_time, end_date_time)
@@ -111,21 +120,27 @@ def main(update_numpy_files=False):
     stepCount1Min = math.ceil((endDateTimeDT - startDateTimeDT).total_seconds() / 60)
     empty_row = np.zeros(shape=stepCount1Min, dtype='f2')
 
-    compile_all_intakes()
+    # completed and files writtedn 2021-12-31 12:13, so doesn't need to be re-run.
+    intakes_obj_add, intakes_obj_mean = compile_all_intakes()
+    intakes_obj_add = write_object_data_to_file(intakes_obj_add,)
+    intakes_obj_mean = write_object_data_to_file(intakes_obj_mean)
+    print(timing_start, '\n', datetime.now() - timing_start, '\nIntakes completed')
+    
+    # None of this implemented yet, 2021-12-31 12:04
     compile_metadata()
     compile_weather()
     compile_pollen()
     compile_exercise()
     compile_sleep()
 
-    # might need to update numpy objects with results of this stuff first to 
-    # clear memory.
+    # DO need to update numpy objects with results of this stuff first to clear memory
 
-    compile_all_outputs()
+    # completed and files writtedn 2021-12-31 13:27, so doesn't need to be re-run.
+    outputs_obj_add, outputs_obj_mean = compile_all_outputs()
+    outputs_obj_add = write_object_data_to_file(outputs_obj_add,)
+    outputs_obj_mean = write_object_data_to_file(outputs_obj_mean)
+    print(timing_start, '\n', datetime.now() - timing_start, '\nOutputs completed')
 
-    if update_numpy_files:
-        pass
-        # update_numpy_files_with_new()
 
     # os.remove(path_prefix + '/backup/memento.db')  # deletes extracted database.
     print(timing_start, '\n', datetime.now() - timing_start, '\nEnd main')
@@ -183,9 +198,9 @@ def compile_all_intakes():
     inputs_fails = []
     inputs_obj_add = {}
     inputs_obj_mean = {}
-    supplements_set = set()
+    # supplements_set = set()
     sublingual_set = set()
-    spray_set = set()
+    # spray_set = set()
 
     get_intake = re.compile('(?:(?:\d\d#)|(?:\d\d\.\d#))? *(.*\D): (.*)')
     check_split_qty = re.compile('(.), (.)')
@@ -220,7 +235,7 @@ def compile_all_intakes():
 
     def process_combined_line(line, index):
         """
-        processes a line and stores it to inputs_obj_mean
+        processes a line and stores it to inputs_obj_add
         :param line: line to process
         :param index: index within empty_row to store new info
         :return: None
@@ -273,7 +288,7 @@ def compile_all_intakes():
 
     def process_supplement_line(line, index):
         """
-        processes a line and stores it to inputs_obj_mean
+        processes a line and stores it to inputs_obj_add
         store any new sublingual as a terminus
         :param line: line to process
         :param index: index within empty_row to store new info
@@ -499,6 +514,7 @@ def compile_all_intakes():
         inputs_obj_add[fld] = info_to_numpy(list_content(field=fld[3:])[useful_indices], ar_type='list')
 
     print('len(inputs_obj_add) = ', str(len(inputs_obj_add)))
+    return inputs_obj_add, inputs_obj_mean
 
 
 def compile_all_outputs():
@@ -506,8 +522,9 @@ def compile_all_outputs():
     symptoms
     """
 
-    global outputs_obj_mean, outputs_fails
+    global outputs_obj_add, outputs_obj_mean, outputs_fails
 
+    outputs_obj_add = {}
     outputs_obj_mean = {}
     outputs_fails = []
 
@@ -546,8 +563,8 @@ def compile_all_outputs():
             # split for [v], [0, 0, 0, v]
             # check for key existence in Numpy entries, if exists, read last value.
 
-            filename = numpy_folder + 'iom-Sy-' + symptom + '.npy'
-            last_value = get_last_value(filename)
+            last_value = get_last_value('../Numpy entries old/' + 'iom-Sy-' + symptom + '.npy')
+            # last_value = get_last_value(numpy_folder + 'iom-Sy-' + symptom + '.npy')
             # prepend last old value before doing anything else.
             outputs_obj_mean[symptom] = np.hstack((last_value, outputs_obj_mean[symptom]))
             splits = np.argwhere(np.diff(outputs_obj_mean[symptom]) < 0).T[0]
@@ -565,18 +582,21 @@ def compile_all_outputs():
         For symptoms marked #P#, i5 is good, positive. For all other symptoms, this isn't so.
         Invert 5 - i value, then replace what would be the initial set of 5s with 0s
         """
+        print('\tcorrect_positives()')
         p_keys = [key for key in outputs_obj_mean if '#P#' in key]
         for key in p_keys:
-            new_key = key.replace('#P# '), ''
+            new_key = key.replace('#P# ', '')
             outputs_obj_mean[new_key] = outputs_obj_mean.pop(key)
             # replace initial 0s with 5s
             outputs_obj_mean[new_key][:np.argmax(outputs_obj_mean[new_key] > 0)] = 5
             outputs_obj_mean[new_key] = 5 - outputs_obj_mean[new_key]
+            
 
     def compile_symptoms_conglomerates():
         """
         Create a conglomerate symptom for each conglomerate in file. Data in form {name1: [sym1, sym2,...], name2:..}
         """
+        print('\tcompile_symptoms_conglomerates()')
         with open(JSON_folder + 'Symptoms conglomerates.json') as f:
             symptoms_conglomerates = json.load(f)
 
@@ -591,11 +611,41 @@ def compile_all_outputs():
                     pass
             outputs_obj_mean[conglomerate] /= count
 
+    def rename_symptoms():
+        """add oom- prefix to all symptoms"""
+        print('\trename_symptoms()')
+        keys = [key for key in outputs_obj_add.keys()]
+        for key in keys:
+            if 'Sc-' not in key:
+                outputs_obj_add['Sy-' + key] = outputs_obj_add.pop(key)
+                
+        keys = [key for key in outputs_obj_mean.keys()]
+        for key in keys:
+            if 'Sc-' not in key:
+                outputs_obj_mean['Sy-' + key] = outputs_obj_mean.pop(key)
+        
+
     def compile_functions():
         """
         Urination, motion and accompanying notes.
+        Overview and weight should be treated as a symptom
+        Schulte and Timespan should be used as is, and only averaged if multiple within same bin_len
+        Compile and add to old entries, then rejig with proper rebinning and prefix.
         """
-        pass
+        simple_data = ['Overview',
+                       'Weight',
+                      '6x6 Schulte',
+                      'New Timespan'
+                      ]
+        
+        
+            
+        
+        list_data = ['Urination notes',
+                    'Motion notes'
+                    ]
+        
+        
 
     def compile_data():
         """
@@ -607,10 +657,13 @@ def compile_all_outputs():
     compile_symptoms()
     correct_positives()
     compile_symptoms_conglomerates()
+    rename_symptoms()
     compile_functions()
     compile_data()
 
     print('compile_all_outputs()', datetime.now())
+    
+    return outputs_obj_add, outputs_obj_mean
 
 
 def compile_metadata():
@@ -663,9 +716,11 @@ def get_last_value(filename):
     get the last value of the numpy array from filename
     """
     try:
-        print(filename)
+        # print(filename)
         return np.load(filename, allow_pickle=True)[-1]
     except FileNotFoundError:
+        print(filename, ' not found')
+        get_last_value_fails.append(filename)
         return 0
 
 
@@ -697,11 +752,35 @@ def info_to_numpy(ar, ar_type=None):
     return ret
 
 
-def update_numpy_file_with_new(new_data, key_name):
+def write_object_data_to_file(obj, key_prefix=''):
+    """
+    Loops through each key in object and writes the data to file
+
+    Parameters
+    ----------
+    obj : obj
+        containing numpy files to write.
+    key_prefix : str
+        prefix to add to keys
+    Returns
+    -------
+    None.
+
+    """    
+    
+    for key in obj:
+        update_numpy_file_with_new(obj[key], key_prefix + key, False)
+    
+    return None
+
+def update_numpy_file_with_new(new_data, key_name, existing):
     """
     for key_name, update existing array with new_data appended or create new array
+    if existing == False, just write the file.
     """
-    global update_numpy_errors
+    global update_numpy_errors, rebin_errors
+    
+    print(key_name)
 
     try:  # to get prefix for input / output
         prefix = key_prefix_decode[key_name[:2]]
@@ -709,22 +788,37 @@ def update_numpy_file_with_new(new_data, key_name):
         print('update numpy error: prefix not found ', key_name)
         prefix = 'unk'
     filename = prefix + '-' + key_name + '.npy'
-
-    try:  # to get old data
-        old_data = np.load(numpy_folder + filename, allow_pickle=True)
-    except FileNotFoundError:
-        old_data = np.empty(len(all_date_times), dtype=new_data.dtype)
-
-    if 'a' in prefix:
-        new_data = rebin_add(new_data, 15)
+    
+    
+    if 'met' in prefix:
+        new_data = rebin_met(new_data, standard_interval_in_min, key_name)
+    elif 'a' in prefix:
+        new_data = rebin_add(new_data, standard_interval_in_min)
+    elif 'm' in prefix:
+        new_data = rebin_mean(new_data, standard_interval_in_min)
+    elif 'c' in prefix:
+        new_data = rebin_condense(new_data, standard_interval_in_min)
     else:
-        new_data = rebin_mean(new_data, 15)
+        rebin_errors.append(key_name)
+        print('Error rebinning ', key_name)            
+        
+        
+    if existing:
+        try:  # to get old data
+            old_data = np.load(numpy_folder + filename, allow_pickle=True)
+        except FileNotFoundError:
+            old_data = np.empty(len(all_date_times), dtype=new_data.dtype)
 
-    try:  # to save file
-        np.save(numpy_folder + filename, np.hstack((old_data, new_data)))
-    except Exception:
-        print('update numpy error: hstack not possible ', key_name,
-              '\nold dtype: ', old_data.dtype, ' new dtype: ', new_data.dtype)
+        try:  # to save file
+            np.save(numpy_folder + filename, np.hstack((old_data, new_data)))
+        except Exception:
+            update_numpy_errors.append(key_name)
+            print('update numpy error: hstack not possible ', key_name,
+                  '\nold dtype: ', old_data.dtype, ' new dtype: ', new_data.dtype)
+    else:
+        np.save(numpy_folder + filename, new_data)
+    
+    return None
 
 
 def rebin_mean(data, binLen, axis=0):
@@ -736,6 +830,33 @@ def rebin_mean(data, binLen, axis=0):
 def rebin_add(data, binLen, axis=0):
     slices = np.linspace(0, data.shape[axis], math.ceil(data.shape[axis] / binLen), endpoint=False, dtype=np.intp)
     return np.add.reduceat(data, slices, axis=axis).astype('f8')
+
+
+def rebin_condense(data, binLen, axis=0):
+    slices = np.linspace(0, data.shape[axis], math.ceil(data.shape[axis] / binLen), endpoint=False, dtype=np.intp)
+    return np.add.reduceat(data, slices, axis=axis)
+
+
+def rebin_met(data, bin_len, key_name):
+    """
+    identifies and rebins metadata arrays appropriately
+
+    Parameters
+    ----------
+    data : np array
+        array of metadata to rebin. Might be anything, hence this custom function.
+    bin_len : int
+        how many bins to condense into one bin.
+
+    Returns
+    -------
+    rebinned array.
+
+    """
+    if key_name in ['Sublingual terminated', 'Rushed intake']:
+        pass
+        
+    return new_data
 
 
 def get_end_date():
@@ -932,6 +1053,6 @@ def compile_spray_locations_from_existing():
     for key in ret_obj:
         np.save(numpy_folder + 'iia-' + key, ret_obj[key])
 
-    
+
     
 Con, Cur = main()

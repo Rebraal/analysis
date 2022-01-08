@@ -6,6 +6,7 @@ import os
 import time
 import numpy as np
 from matplotlib import pyplot as plt
+from matplotlib import dates
 import math
 import pytz
 from dateutil import parser
@@ -41,7 +42,6 @@ emptyRow = np.zeros(shape=stepCount1Min, dtype='f2')
 #   Run create numpy files on TAS 2021-06, then Dump, selecting appropriate entries.
 #   Probably the simplest way to do this is to use Create numpy files directly and to alter the database
 #   funtions to access all three databases and return all the info at once. 
-#   Going to have to do something with the useful_indices problem. Put it inside the list_content?
 #   Complete create numpy files, then run on all databases to complete epoch data.
 #   Then clean everything.
 
@@ -150,6 +150,7 @@ class Dates:
         max_intervals = math.ceil((endDateTimeInMin - startDateTimeInMin) / standard_interval_in_min)
         minutes_elapsed = np.arange(max_intervals, dtype='f8') * standard_interval_in_min
         date_strings = Dates.np_dstr_from_ts(minutes_elapsed, '%Y-%m-%d %H:%M')
+        numpy_dates = dates.date2num([parser.parse(dt) for dt in date_strings])
         np.save('../Numpy entries/met-Dt-Minutes elapsed.npy', minutes_elapsed)
         np.save('../Numpy entries/met-Dt-Date strings.npy', date_strings)
         return minutes_elapsed, date_strings
@@ -389,11 +390,14 @@ class Weather:
         
 
 class Pollen:
+    
+    # Free trials have stopped working, I reckon. Got a bunch of data at 4h intervals, so probably not losing much.
 
-    def create_pollen_inputs():
+    def create_pollen_inputs(self, st):
         """
         creates an array of [timestamps, lat, lon]
         slices at appropriate intervals
+        st switches between 0300 and 0500 start. '0300' or '0500'
         """
         dates = np.load('../Numpy entries/met-Dt-Date strings.npy', allow_pickle=True)
         locs = np.load('../Numpy entries/met-Lo-Expanded locations.npy', allow_pickle=True)
@@ -402,14 +406,23 @@ class Pollen:
         data_interval_in_hours = 4 
         steps = math.floor(data_interval_in_hours * 60 / standard_interval_in_min)
         one_hour_in_intervals = math.floor(60 / standard_interval_in_min)
-        offset = steps - one_hour_in_intervals
-        # might need to bodge the start dates with a [:-1] at the end, if there are a silly number of entries?
-        # 12 = 16 - 4 (1h before)
-        start_dates = np.array([np.append(['2019-09-01 03:00'], dates[offset::steps])]).T
-        # need to have a time interval that is more than exactly 1h, so 23:00 to 00:15 gives 00:00 data.
-        # this seems to cut off the last entry for some reason? 2021-07-01 03:45 results in 2021-06-30 23:00
-        pollen_inputs = np.flip(np.hstack((start_dates[:-1], np.hstack((dates, locs))[1::steps])), axis=0)
+        if st == '0500':
+            offset = steps + one_hour_in_intervals
+            # might need to bodge the start dates with a [:-1] at the end, if there are a silly number of entries?
+            # 12 = 16 - 4 (1h before)
+            start_dates = np.array([np.append(['2019-09-01 05:00'], dates[offset::steps])]).T
+            # need to have a time interval that is more than exactly 1h, so 23:00 to 00:15 gives 00:00 data.
+            # this seems to cut off the last entry for some reason? 2021-07-01 03:45 results in 2021-06-30 23:00
+            # pollen_inputs = np.flip(np.hstack((start_dates[:-1], np.hstack((dates, locs))[1::steps])), axis=0)
+            pollen_inputs = np.flip(np.hstack((start_dates, np.hstack((dates, locs))[5::steps])), axis=0)
+        elif st == '0300':
+            offset = steps - one_hour_in_intervals
+            # 12 = 16 - 4 (1h before)
+            start_dates = np.array([np.append(['2019-09-01 03:00'], dates[offset::steps])]).T
+            # this seems to cut off the last entry for some reason? 2021-07-01 03:45 results in 2021-06-30 23:00
+            pollen_inputs = np.flip(np.hstack((start_dates[:-1], np.hstack((dates, locs))[1::steps])), axis=0)
         np.save('../Numpy entries/met-Pi-Pollen inputs.npy', pollen_inputs)
+        self.inputs = pollen_inputs
         
     def populate_pollen_data(num_records=100, key=0):
         """
@@ -437,13 +450,14 @@ class Pollen:
                            "from": start_stamp,
                            "to": end_stamp
                            }
-            key = "QMHiXHhzaN3D9pScEpq2a1cGS82Xkccn2muBtC3Z" if key == 0 \
-                else '688976de17b96025ac1554585fe0d3f657ee2a60dda7d8caba06e748592e73b1'
-                # else "4c6a68263625a70f72eedd67c6eb99849a61d9f697e3c2c14ee21ae42ce86bf0"
+            if key == 0:
+                print('ta1')
+                key = "QMHiXHhzaN3D9pScEpq2a1cGS82Xkccn2muBtC3Z"  # 2021-12-31 active Tim
+            elif key == 1:
+                print('ba1')
+                key = "4c6a68263625a70f72eedd67c6eb99849a61d9f697e3c2c14ee21ae42ce86bf0" # 2021-12-31 dead Bob
+                
             headers = {
-                # 'x-api-key': "QMHiXHhzaN3D9pScEpq2a1cGS82Xkccn2muBtC3Z",  # Tim
-                # 'x-api-key': "4c6a68263625a70f72eedd67c6eb99849a61d9f697e3c2c14ee21ae42ce86bf0",  # Bob
-                # 'x-api-key': "688976de17b96025ac1554585fe0d3f657ee2a60dda7d8caba06e748592e73b1",  # T
                 'x-api-key': key,
                 'Content-type': "application/json"
                 }
@@ -471,12 +485,116 @@ class Pollen:
 
         print('Completed')    
 
+
+    def populate_with_all_keys():
+        Pollen.populate_pollen_data(key=0)
+        Pollen.populate_pollen_data(key=1)
+        Pollen.populate_pollen_data(key=2)
+        
+    def check_valid_data():
+        global cdata
+        # folder = '../Ambee pollen data/'  # full of empties when checked 2022-01-01
+        folder = '../Ambee pollen data 0300 start/'  # 17 of ~4300 dead, so might not be worth the worry.
+        invalid = 0
+        
+        for file in sorted(os.listdir(folder)):
+            with open(folder + file) as f:
+                cdata = json.loads(json.load(f))
+                if len(cdata['data']) == 0:
+                    invalid += 1
+                    print(invalid, ', ', file)
+
+
+# allow combination of liquids and solids
+class Combine:
+    
+    def combine_prefixes(prefix, outfilename):
+        folder = '../Numpy entries/'
+        dt = np.load(folder + 'met-Dt-Minutes elapsed.npy', allow_pickle=True)
+        op = np.zeros(shape=dt.shape)
+        for file in os.listdir(folder):
+            if prefix in file:
+                op += np.load(folder + file, allow_pickle=True)
+        np.save(folder + outfilename, op)
+    
+    
+class Conglomeration:
+    
+    
+    def check_stuff():
+        date_strings = np.load('../Numpy entries met backup/met-Dt-Date strings.npy', allow_pickle=True)
+        old_date_strings = np.load('../Numpy entries old/met-Dt-Date strings.npy', allow_pickle=True)
+        old_empty = np.zeros(len(old_date_strings), dtype='f8')
+        
+        filename = 'iia-Al-Caffeine.npy'
+        old_data = np.load('../Numpy entries old/' + filename, allow_pickle=True)
+        new_data = np.load('../Numpy entries/' + filename, allow_pickle=True)
+        
+        # check for duplicate date entries, although given they're all created from the one file, somewhat pointless
+        b, c = np.unique(date_strings, return_counts=True)
+        print(np.sum(c != 1))
+        d = np.argwhere(c != 1).T[0]
+        dv = b[d]
+        print(dv)
+        print(c[d])
+        # This shows a bunch of duplicated dates in October, early morning. DST nonsense.
+        # check lengths add up
+        print(len(date_strings) - len(old_data) - len(new_data))
+    
+    def conglomerate_numpy_entries(self):
+        """Stick together old and new numpy entries"""
+        
+        self.errors = []
+        
+        old_date_strings = np.load('../Numpy entries old/met-Dt-Date strings.npy', allow_pickle=True)
+        old_empty = np.zeros(len(old_date_strings), dtype='f8')
+        
+        for file in sorted(os.listdir('../Numpy entries new/')):
+            if file.endswith('.npy'):
+                new_data = np.load('../Numpy entries new/' + file, allow_pickle=True)
+                try:
+                   old_data = np.load('../Numpy entries old/' + file, allow_pickle=True)
+                except FileNotFoundError:
+                    old_data = old_empty.copy()
+                    self.errors.append(file)
+                np.save('../Numpy entries/' + file, np.hstack((old_data, new_data)))
+                with open('../Old-new conglomeration errors.txt', 'w+') as f:
+                    f.write('\n'.join(self.errors))
+                    
+    def manual_join(old_filename, new_filename):
+        old_data = np.load('../Numpy entries old/' + old_filename, allow_pickle=True)
+        new_data = np.load('../Numpy entries new/' + new_filename, allow_pickle=True)
+        np.save('../Numpy entries/' + new_filename, np.hstack((old_data, new_data)))
+        
+    # in form: old_filename, new_filename
+    # rest seem to be new stuff.
+    manually_joined = {
+        'iom-Sy-05 30 02 Hands, left, palm 5#1 dry skin.npy': 'iom-Sy-05 30 05 Hands, left, palm 5#1 dry skin.npy',
+        'iom-Sy-05 30 02 Hands, left, palm 5#1 dry skin.npy': 'iom-Sy-05 30 05 Hands, left, palm 5#1 dry skin.npy',
+        'iom-Sy-05 60 06 Hands, right, palm 2#4 dry skin.npy': 'iom-Sy-05 60 05 Hands, right, palm 2#4 dry skin.npy',
+        'iom-Sy-Hands, right, palm 5#2 dry skin.npy': 'iom-Sy-05 75 03 Hands, right, palm 5#2 dry skin.npy',
+        'iia-Me-Rushed intake.npy': 'met-Me-Rushed intake.npy',
+        'iia-Me-Sublingual terminated.npy': 'met-Me-Sublingual terminated.npy' 
+        }
+                    
+
+class Elimination:
+    
+    for field in ['Urination','Motion']:
+        pass
+        
+    
+    for field in ['Urination notes','Motion notes']:
+        pass
+    
 # print(source_folder + 'memento.db')    
 # Con, Cur = Dbfuns.opendb(source_folder + 'memento.db')
 # dates = Dates()
 # locations = Locations()
 # weather_inputs = Weather.create_weather_inputs_from_google_locations(locations.timestamps, locations.locations)
 # got_weather = Weather.get_all_weather_data()
-
+# cong = Conglomeration()
+# cong.conglomerate_numpy_entries()
+# Pollen.populate_with_all_keys()
 
 print('Loaded')
